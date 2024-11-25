@@ -66,7 +66,7 @@ step_stride = 0
 img_idx = 0
 
 net = Model(6, mode).to(device)
-net.load_state_dict(torch.load(checkpoint))
+net.load_state_dict(torch.load(checkpoint, map_location=torch.device(device)))
 net.eval()
 for i in tqdm(range(audio_feats.shape[0])):
     if img_idx>len_img - 1:
