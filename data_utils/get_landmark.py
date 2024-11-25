@@ -11,6 +11,9 @@ from detect_face import SCRFD
 # from models.pfld_lite import PFLDInference
 # from models.pfld import PFLDInference
 from pfld_mobileone import PFLD_GhostOne as PFLDInference
+
+device = "cuda" if torch.cuda.is_available() else "cpu"
+
 def face_det(img, model):
 
     cropped_imgs = []
@@ -76,7 +79,7 @@ class Landmark:
         self.det_net = SCRFD('./scrfd_2.5g_kps.onnx', confThreshold=0.1, nmsThreshold=0.5)
 
         checkpoint = torch.load('./checkpoint_epoch_335.pth.tar')
-        self.pfld_backbone = PFLDInference().cuda()
+        self.pfld_backbone = PFLDInference().to(device)
         self.pfld_backbone.load_state_dict(checkpoint['pfld_backbone'])
         self.pfld_backbone.eval()
 
@@ -97,11 +100,11 @@ class Landmark:
         input = np.asarray(input, dtype=np.float32) / 255.0
         input = input.transpose(2,0,1)
         input = torch.from_numpy(input)[None]
-        input = input.cuda()
+        input = input.to(device)
         # print(input)
         # asd
 
-        # input = transform(input).unsqueeze(0).cuda()
+        # input = transform(input).unsqueeze(0).to(device)
         landmarks = self.pfld_backbone(input)
         pre_landmark = landmarks[0]
         pre_landmark = pre_landmark.cpu().detach().numpy()

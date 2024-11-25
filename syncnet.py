@@ -9,7 +9,7 @@ from torch import optim
 import random
 import argparse
 
-
+device = "cuda" if torch.cuda.is_available() else "cpu"
 
 class Dataset(object):
     def __init__(self, dataset_dir, mode):
@@ -222,15 +222,15 @@ def train(save_dir, dataset_dir, mode):
     train_data_loader = DataLoader(
         train_dataset, batch_size=16, shuffle=True,
         num_workers=4)
-    model = SyncNet_color(mode).cuda()
+    model = SyncNet_color(mode).to(device)
     optimizer = optim.Adam([p for p in model.parameters() if p.requires_grad],
                            lr=0.001)
     for epoch in range(40):
         for batch in train_data_loader:
             imgT, audioT, y = batch
-            imgT = imgT.cuda()
-            audioT = audioT.cuda()
-            y = y.cuda()
+            imgT = imgT.to(device)
+            audioT = audioT.to(device)
+            y = y.to(device)
             audio_embedding, face_embedding = model(imgT, audioT)
             loss = cosine_loss(audio_embedding, face_embedding, y)
             loss.backward()
