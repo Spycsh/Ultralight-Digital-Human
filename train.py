@@ -32,6 +32,11 @@ def get_args():
 args = get_args()
 use_syncnet = args.use_syncnet
 device = args.device
+if device == "hpu":
+    import habana_frameworks.torch.core as htcore
+    import habana_frameworks.torch.gpu_migration
+    from habana_frameworks.torch.hpu import wrap_in_hpu_graph
+
 # Loss functions
 class PerceptualLoss():
     
@@ -139,4 +144,5 @@ if __name__ == '__main__':
     
     
     net = Model(6, args.asr).to(device)
+    #net = wrap_in_hpu_graph(net)
     train(net, args.epochs, args.batchsize, args.lr)

@@ -8,8 +8,7 @@ import numpy as np
 from torch import optim
 import random
 import argparse
-
-device = "cuda" if torch.cuda.is_available() else "cpu"
+from tqdm import tqdm
 
 class Dataset(object):
     def __init__(self, dataset_dir, mode):
@@ -221,13 +220,14 @@ def train(save_dir, dataset_dir, mode):
     train_dataset = Dataset(dataset_dir, mode=mode)
     train_data_loader = DataLoader(
         train_dataset, batch_size=16, shuffle=True,
-        num_workers=4)
+        num_workers=4,)# drop_last=True)
     model = SyncNet_color(mode).to(device)
     optimizer = optim.Adam([p for p in model.parameters() if p.requires_grad],
                            lr=0.001)
     for epoch in range(40):
-        for batch in train_data_loader:
+        for batch in tqdm(train_data_loader):
             imgT, audioT, y = batch
+            #print(imgT.shape, audioT.shape, y.shape)
             imgT = imgT.to(device)
             audioT = audioT.to(device)
             y = y.to(device)
@@ -235,6 +235,9 @@ def train(save_dir, dataset_dir, mode):
             loss = cosine_loss(audio_embedding, face_embedding, y)
             loss.backward()
             optimizer.step()
+            # add this line explicitly to avoid hanging!!
+            if device == "hpu":
+                torch.hpu.synchronize()
         print(epoch, loss.item())
         torch.save(model.state_dict(), os.path.join(save_dir, str(epoch)+'.pth'))
             
@@ -247,8 +250,12 @@ if __name__ == "__main__":
     parser.add_argument('--save_dir', type=str)
     parser.add_argument('--dataset_dir', type=str)
     parser.add_argument('--asr', type=str)
+    parser.add_argument('--device', type=str, default="cuda")
     opt = parser.parse_args()
-    
+    device = opt.device
+    if device == "hpu":
+        import habana_frameworks.torch.core as htcore
+        import habana_frameworks.torch.gpu_migration
     # syncnet = SyncNet_color(mode=opt.asr)
     # img = torch.zeros([1,3,160,160])
     # # audio = torch.zeros([1,128,16,32])
