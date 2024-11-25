@@ -12,6 +12,8 @@ from unet import Model
 # from unet_att import Model
 
 import time
+from tqdm import tqdm
+
 parser = argparse.ArgumentParser(description='Train',
                                      formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 
@@ -20,6 +22,8 @@ parser.add_argument('--dataset', type=str, default="")
 parser.add_argument('--audio_feat', type=str, default="")
 parser.add_argument('--save_path', type=str, default="")     # end with .mp4 please
 parser.add_argument('--checkpoint', type=str, default="")
+parser.add_argument('--device', type=str, default="cuda")
+
 args = parser.parse_args()
 
 checkpoint = args.checkpoint
@@ -27,6 +31,7 @@ save_path = args.save_path
 dataset_dir = args.dataset
 audio_feat_path = args.audio_feat
 mode = args.asr
+device = args.device
 
 def get_audio_features(features, index):
     left = index - 8
@@ -60,10 +65,10 @@ if mode=="wenet":
 step_stride = 0
 img_idx = 0
 
-net = Model(6, mode).cuda()
+net = Model(6, mode).to(device)
 net.load_state_dict(torch.load(checkpoint))
 net.eval()
-for i in range(audio_feats.shape[0]):
+for i in tqdm(range(audio_feats.shape[0])):
     if img_idx>len_img - 1:
         step_stride = -1
     if img_idx<1:
@@ -108,8 +113,8 @@ for i in range(audio_feats.shape[0]):
     if mode=="wenet":
         audio_feat = audio_feat.reshape(256,16,32)
     audio_feat = audio_feat[None]
-    audio_feat = audio_feat.cuda()
-    img_concat_T = img_concat_T.cuda()
+    audio_feat = audio_feat.to(device)
+    img_concat_T = img_concat_T.to(device)
     
     with torch.no_grad():
         pred = net(img_concat_T, audio_feat)[0]
