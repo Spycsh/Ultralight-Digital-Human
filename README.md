@@ -94,7 +94,7 @@ Train a syncnet first for better results.
 
 ``` bash
 cd ..
-python syncnet.py --save_dir ./syncnet_ckpt/ --dataset_dir ./data_dir/ --asr hubert
+python syncnet.py --save_dir ./syncnet_ckpt/ --dataset_dir ./data_utils/ --asr hubert
 ```
 
 Then find a best one（low loss） to train digital human model.
@@ -103,7 +103,7 @@ Then find a best one（low loss） to train digital human model.
 
 ``` bash
 cd ..
-python train.py --dataset_dir ./data_dir/ --save_dir ./checkpoint/ --asr hubert --use_syncnet --syncnet_checkpoint syncnet_ckpt
+python train.py --dataset_dir ./data_utils/ --save_dir ./checkpoint/ --asr hubert --use_syncnet --syncnet_checkpoint syncnet_ckpt
 ```
 
 ## inference
@@ -124,7 +124,7 @@ then you get your_test_audio_hu.npy or your_test_audio_wenet.npy
 
 then run
 ``` bash
-python inference.py --asr hubert --dataset ./your_data_dir/ --audio_feat your_test_audio_hu.npy --save_path xxx.mp4 --checkpoint your_trained_ckpt.pth
+python inference.py --asr hubert --dataset ./data_utils/ --audio_feat male_gaudi_1_hu.npy --save_path out.mp4 --checkpoint checkpoint/5.pth
 ```
 
 To merge the audio and the video, run

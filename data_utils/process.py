@@ -2,6 +2,7 @@ import os
 import cv2
 import argparse
 import numpy as np
+import tqdm
 
 def extract_audio(path, out_path, sample_rate=16000):
     
@@ -49,7 +50,7 @@ def get_landmark(path, landmarks_dir):
     from get_landmark import Landmark
     landmark = Landmark()
     
-    for img_name in os.listdir(full_img_dir):
+    for img_name in tqdm.tqdm(os.listdir(full_img_dir)):
         if not img_name.endswith(".jpg"):
             continue
         img_path = os.path.join(full_img_dir, img_name)
