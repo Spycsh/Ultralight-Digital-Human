@@ -3,6 +3,9 @@ import cv2
 import argparse
 import numpy as np
 import tqdm
+import torch
+
+device = "cuda" if torch.cuda.is_available() else "cpu"
 
 def extract_audio(path, out_path, sample_rate=16000):
     
@@ -41,7 +44,7 @@ def get_audio_feature(wav_path, mode):
     if mode == "wenet":
         os.system("python wenet_infer.py "+wav_path)
     if mode == "hubert":
-        os.system("python hubert.py --wav "+wav_path)
+        os.system("python hubert.py --wav "+wav_path+" --device "+device)
     
 def get_landmark(path, landmarks_dir):
     print("detecting landmarks...")
