@@ -123,6 +123,8 @@ for i in tqdm(range(audio_feats.shape[0])):
     img_concat_T = img_concat_T.to(device)
     
     with torch.no_grad():
+        # Control here to close the mouth?
+        # audio_feat.fill_(0)
         pred = net(img_concat_T, audio_feat)[0]
         
     pred = pred.cpu().numpy().transpose(1,2,0)*255
