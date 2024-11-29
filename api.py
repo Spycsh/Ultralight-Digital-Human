@@ -8,19 +8,16 @@ from starlette.middleware.cors import CORSMiddleware
 import argparse
 import base64
 import uvicorn
-from pydub import AudioSegment
 import torch
 import numpy as np
-import torch.nn as nn
-from torch import optim
-from torch.utils.data import DataLoader
-from unet import Model
 from fastapi import FastAPI, Request
 from fastapi.responses import Response, StreamingResponse
 from fastapi import File, UploadFile, HTTPException
 from transformers import Wav2Vec2Processor, HubertModel
 import soundfile as sf
 import librosa
+
+from unet import Model
 
 # from unet2 import Model
 # from unet_att import Model

@@ -1,0 +1,9 @@
+
+cv2
+fastapi
+uvicorn
+torch
+transformers
+librosa
+soundfile
+tqdm
