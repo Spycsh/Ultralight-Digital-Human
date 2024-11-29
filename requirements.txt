@@ -6,3 +6,4 @@ transformers
 librosa
 soundfile
 tqdm
+python-multipart
