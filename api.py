@@ -57,7 +57,6 @@ def get_audio_features(features, index):
 @torch.no_grad()
 def get_hubert_from_16k_speech(speech, device="cuda:0"):
     global hubert_model
-    hubert_model = hubert_model.to(device)
     if speech.ndim ==2:
         speech = speech[:, 0] # [T, 2] ==> [T,]
     input_values_all = wav2vec2_processor(speech, return_tensors="pt", sampling_rate=16000).input_values # [1, T]
@@ -134,11 +133,18 @@ def dh_infer(file_name):
 
     save_path = uid + ".mp4"
 
-    global w, h
+    # audio_feats = np.load(audio_feat_path)
+    img_dir = os.path.join(dataset_dir, "full_body_img/")
+    lms_dir = os.path.join(dataset_dir, "landmarks/")
+    len_img = len(os.listdir(img_dir)) - 1
+    exm_img = cv2.imread(img_dir+"0.jpg")
+    h, w = exm_img.shape[:2]
+
     if mode=="hubert":
         video_writer = cv2.VideoWriter(save_path, cv2.VideoWriter_fourcc('M','J','P', 'G'), 25, (w, h))
     if mode=="wenet":
         video_writer = cv2.VideoWriter(save_path, cv2.VideoWriter_fourcc('M','J','P', 'G'), 20, (w, h))
+
 
     for i in tqdm(range(audio_feats.shape[0])):
         if img_idx>len_img - 1:
@@ -200,10 +206,15 @@ def dh_infer(file_name):
     video_writer.release()
 
     # combine together the audio and video
+
     os.system(f"ffmpeg -i {save_path} -i {file_name} -c:v libx264 -c:a aac {uid}_final.mp4")
     # Remove upload audio file
     os.remove(file_name)
     os.remove(save_path)
+    print(f"write to {uid}_final.mp4")
+    if not os.path.exists(f"{uid}_final.mp4"):
+        raise FileNotFoundError(f"Output file not generated: {uid}_final.mp4")
+
     return f"{uid}_final.mp4"
 
 
@@ -269,16 +280,6 @@ if __name__ == "__main__":
     mode = args.asr
     device = args.device
 
-    # audio_feats = np.load(audio_feat_path)
-    img_dir = os.path.join(dataset_dir, "full_body_img/")
-    lms_dir = os.path.join(dataset_dir, "landmarks/")
-    len_img = len(os.listdir(img_dir)) - 1
-    exm_img = cv2.imread(img_dir+"0.jpg")
-    h, w = exm_img.shape[:2]
-
-    step_stride = 0
-    img_idx = 0
-
     net = Model(6, mode)
     net.load_state_dict(torch.load(checkpoint, map_location=torch.device("cpu")))
     if device == "hpu":
@@ -293,6 +294,7 @@ if __name__ == "__main__":
     wav2vec2_processor = Wav2Vec2Processor.from_pretrained("facebook/hubert-large-ls960-ft")
     print("Loading the HuBERT Model...")
     hubert_model = HubertModel.from_pretrained("facebook/hubert-large-ls960-ft")
+    hubert_model = hubert_model.to(device)
 
     uvicorn.run(app, host=args.host, port=args.port)
 
