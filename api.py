@@ -339,6 +339,7 @@ async def digital_human(request: Request):
 
 @app.post("/v1/digital_human_fast")
 async def digital_human(request: Request):
+    # FIXME fix the multipart error, do not use this!!
     """Input: path to the audio, Output: Streaming JPEG frames response."""
     print("Digital human inference begin.")
 
