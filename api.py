@@ -120,6 +120,85 @@ def generate_video(output_video_path):
         yield from file_like
     os.remove(output_video_path)
 
+def dh_infer_gen(file_path):
+    audio_feats = convert_audio_to_hubert_feat(file_path)
+
+
+    step_stride = 0
+    img_idx = 0
+
+    img_dir = os.path.join(dataset_dir, "full_body_img/")
+    lms_dir = os.path.join(dataset_dir, "landmarks/")
+    len_img = len(os.listdir(img_dir)) - 1
+    exm_img = cv2.imread(img_dir+"0.jpg")
+    h, w = exm_img.shape[:2]
+    # generate frames with variable time control
+    frame_time = 1 / 25 if mode=="hubert" else 20
+
+    for i in tqdm(range(audio_feats.shape[0])):
+        start_time = time.time()
+        if img_idx>len_img - 1:
+            step_stride = -1
+        if img_idx<1:
+            step_stride = 1
+        img_idx += step_stride
+        img_path = img_dir + str(img_idx)+'.jpg'
+        lms_path = lms_dir + str(img_idx)+'.lms'
+
+        img = cv2.imread(img_path)
+        lms_list = []
+        with open(lms_path, "r") as f:
+            lines = f.read().splitlines()
+            for line in lines:
+                arr = line.split(" ")
+                arr = np.array(arr, dtype=np.float32)
+                lms_list.append(arr)
+        lms = np.array(lms_list, dtype=np.int32)
+        xmin = lms[1][0]
+        ymin = lms[52][1]
+
+        xmax = lms[31][0]
+        width = xmax - xmin
+        ymax = ymin + width
+        crop_img = img[ymin:ymax, xmin:xmax]
+        h, w = crop_img.shape[:2]
+        crop_img = cv2.resize(crop_img, (168, 168), cv2.INTER_AREA)
+        crop_img_ori = crop_img.copy()
+        img_real_ex = crop_img[4:164, 4:164].copy()
+        img_real_ex_ori = img_real_ex.copy()
+        img_masked = cv2.rectangle(img_real_ex_ori,(5,5,150,145),(0,0,0),-1)
+ 
+        img_masked = img_masked.transpose(2,0,1).astype(np.float32)
+        img_real_ex = img_real_ex.transpose(2,0,1).astype(np.float32)
+
+        img_real_ex_T = torch.from_numpy(img_real_ex / 255.0)
+
+        img_masked_T = torch.from_numpy(img_masked / 255.0)
+        img_concat_T = torch.cat([img_real_ex_T, img_masked_T], axis=0)[None]
+
+        audio_feat = get_audio_features(audio_feats, i)
+        if mode=="hubert":
+            audio_feat = audio_feat.reshape(32,32,32)
+        if mode=="wenet":
+            audio_feat = audio_feat.reshape(256,16,32)
+        audio_feat = audio_feat[None]
+        audio_feat = audio_feat.to(device)
+        img_concat_T = img_concat_T.to(device)
+
+        with torch.no_grad():
+            pred = net(img_concat_T, audio_feat)[0]
+
+        pred = pred.cpu().numpy().transpose(1,2,0)*255
+        pred = np.array(pred, dtype=np.uint8)
+        crop_img_ori[4:164, 4:164] = pred
+        crop_img_ori = cv2.resize(crop_img_ori, (w, h))
+        img[ymin:ymax, xmin:xmax] = crop_img_ori
+
+        _, jpeg_frame = cv2.imencode('.jpg', img)
+        yield jpeg_frame.tobytes()
+        elapsed_time = time.time() - start_time
+        sleep_time = max(0, frame_time - elapsed_time)
+        time.sleep(sleep_time) # keep 25fps yield
 
 def dh_infer(file_name):
     uid = file_name.split(".")[0]
@@ -142,8 +221,11 @@ def dh_infer(file_name):
     if mode=="wenet":
         video_writer = cv2.VideoWriter(save_path, cv2.VideoWriter_fourcc('M','J','P', 'G'), 20, (w, h))
 
+    # generate frames with variable time control
+    frame_time = 1 / 25 if mode=="hubert" else 20
 
     for i in tqdm(range(audio_feats.shape[0])):
+        start_time = time.time()
         if img_idx>len_img - 1:
             step_stride = -1
         if img_idx<1:
@@ -174,10 +256,10 @@ def dh_infer(file_name):
         img_real_ex = crop_img[4:164, 4:164].copy()
         img_real_ex_ori = img_real_ex.copy()
         img_masked = cv2.rectangle(img_real_ex_ori,(5,5,150,145),(0,0,0),-1)
-        
+ 
         img_masked = img_masked.transpose(2,0,1).astype(np.float32)
         img_real_ex = img_real_ex.transpose(2,0,1).astype(np.float32)
-        
+
         img_real_ex_T = torch.from_numpy(img_real_ex / 255.0)
         img_masked_T = torch.from_numpy(img_masked / 255.0)
         img_concat_T = torch.cat([img_real_ex_T, img_masked_T], axis=0)[None]
@@ -200,6 +282,7 @@ def dh_infer(file_name):
         crop_img_ori = cv2.resize(crop_img_ori, (w, h))
         img[ymin:ymax, xmin:xmax] = crop_img_ori
         video_writer.write(img)
+
     video_writer.release()
 
     # combine together the audio and video
@@ -254,6 +337,17 @@ async def digital_human(request: Request):
 
     return StreamingResponse(generate_video(res_path), media_type="video/mp4")
 
+@app.post("/v1/digital_human_fast")
+async def digital_human(request: Request):
+    """Input: path to the audio, Output: Streaming JPEG frames response."""
+    print("Digital human inference begin.")
+
+    request_dict = await request.json()
+    file_path = request_dict.pop("audio_path")
+
+    jpeg_gen = dh_infer_gen(file_path,)
+
+    return StreamingResponse(jpeg_gen, media_type="multipart/x-mixed-replace; boundary=frame")
 
 if __name__ == "__main__":
 
