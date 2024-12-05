@@ -265,23 +265,25 @@ async def dh_infer_gen(file_path, bs=50):
             video_writer.write(img)
         video_writer.release()
 
-        # TODO bind audio with the save_path video
-        # clip the partial audio
-        result_path = f"result_{save_path}"
-        partial_audio_path = f"result_{save_path.split('.')[0]}.wav"
-        # Duration of each video chunk in seconds
-        chunk_duration = bs / 25 if mode == "hubert" else 20
-        # Convert chunk duration to samples
-        sample_wav_for_each_run = int(chunk_duration * 16000)
-        partial_audio = speech_16k[i*sample_wav_for_each_run: (i+1)*sample_wav_for_each_run]
-        sf.write(partial_audio_path, partial_audio, 16000)
-        os.system(f"ffmpeg -i {save_path} -i {partial_audio_path} -c:v libx264 -c:a aac -ar 16000 -r 25 -shortest {result_path}")
-        os.remove(save_path)
-        os.remove(partial_audio_path)
-        for res_str in generate_video_as_text_stream(result_path):
+        # # TODO bind audio with the save_path video
+        # # clip the partial audio
+        # result_path = f"result_{save_path}"
+        # partial_audio_path = f"result_{save_path.split('.')[0]}.wav"
+        # # Duration of each video chunk in seconds
+        # chunk_duration = bs / 25 if mode == "hubert" else 20
+        # # Convert chunk duration to samples
+        # sample_wav_for_each_run = int(chunk_duration * 16000)
+        # partial_audio = speech_16k[i*sample_wav_for_each_run: (i+1)*sample_wav_for_each_run]
+        # sf.write(partial_audio_path, partial_audio, 16000)
+        # TODO This gernerated clips is not length identical to the original audio/video!!
+        # os.system(f"ffmpeg -i {save_path} -i {partial_audio_path} -c:v libx264 -c:a aac -ar 16000 -r 25 -shortest {result_path}")
+        # os.remove(partial_audio_path)
+        # for res_str in generate_video_as_text_stream(result_path):
+        for res_str in generate_video_as_text_stream(save_path):
             yield res_str
         if i == 0:
             print(f"First batch video returned in {time.time()-S} sec")
+        # os.remove(save_path)
 
     print(f"Unet generation and video write takes {time.time()-S} sec")
     yield "data: [DONE]\n\n"
