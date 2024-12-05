@@ -105,7 +105,7 @@ def make_even_first_dim(tensor):
         return tensor[:size[0]]
     return tensor
 
-def convert_audio_to_hubert_feat(wav_path):
+def convert_audio_to_hubert_feat(wav_path, return_ori_audio=False):
     speech, sr = sf.read(wav_path)
     speech_16k = librosa.resample(speech, orig_sr=sr, target_sr=16000)
     print("SR: {} to {}".format(sr, 16000))
@@ -113,92 +113,180 @@ def convert_audio_to_hubert_feat(wav_path):
     hubert_hidden = make_even_first_dim(hubert_hidden).reshape(-1, 2, 1024)
     # np.save(wav_name.replace('.wav', '_hu.npy'), hubert_hidden.detach().numpy())
     # print(hubert_hidden.detach().numpy().shape)
+    if return_ori_audio:
+        return hubert_hidden.detach().numpy(), speech_16k
     return hubert_hidden.detach().numpy()
 
 def generate_video(output_video_path):
     with open(output_video_path, mode="rb") as file_like:
         yield from file_like
-    os.remove(output_video_path)
 
-def dh_infer_gen(file_path):
-    audio_feats = convert_audio_to_hubert_feat(file_path)
+def generate_video_as_text_stream(output_video_path):
+    with open(output_video_path, mode="rb") as file_like:
+        bytes = file_like.read()
+        b64_str = base64.b64encode(bytes).decode()
+        yield f"data: {b64_str}\n\n"
 
+async def dh_infer_gen(file_path, bs=50):
+    """Input audio file path, Output batched video generator."""
+    audio_feats, speech_16k = convert_audio_to_hubert_feat(file_path, return_ori_audio=True)
+    uid = str(uuid.uuid4())
 
-    step_stride = 0
-    img_idx = 0
+    total_frame_num = audio_feats.shape[0]
+    total_run = (total_frame_num + bs - 1) // bs
 
     img_dir = os.path.join(dataset_dir, "full_body_img/")
     lms_dir = os.path.join(dataset_dir, "landmarks/")
     len_img = len(os.listdir(img_dir)) - 1
     exm_img = cv2.imread(img_dir+"0.jpg")
-    h, w = exm_img.shape[:2]
-    # generate frames with variable time control
-    frame_time = 1 / 25 if mode=="hubert" else 20
+    init_h, init_w = exm_img.shape[:2]
 
-    for i in tqdm(range(audio_feats.shape[0])):
-        start_time = time.time()
-        if img_idx>len_img - 1:
-            step_stride = -1
-        if img_idx<1:
-            step_stride = 1
-        img_idx += step_stride
-        img_path = img_dir + str(img_idx)+'.jpg'
-        lms_path = lms_dir + str(img_idx)+'.lms'
+    step_stride = 0
+    img_idx = 0
 
-        img = cv2.imread(img_path)
-        lms_list = []
-        with open(lms_path, "r") as f:
-            lines = f.read().splitlines()
-            for line in lines:
-                arr = line.split(" ")
-                arr = np.array(arr, dtype=np.float32)
-                lms_list.append(arr)
-        lms = np.array(lms_list, dtype=np.int32)
-        xmin = lms[1][0]
-        ymin = lms[52][1]
+    S = time.time()
 
-        xmax = lms[31][0]
-        width = xmax - xmin
-        ymax = ymin + width
-        crop_img = img[ymin:ymax, xmin:xmax]
-        h, w = crop_img.shape[:2]
-        crop_img = cv2.resize(crop_img, (168, 168), cv2.INTER_AREA)
-        crop_img_ori = crop_img.copy()
-        img_real_ex = crop_img[4:164, 4:164].copy()
-        img_real_ex_ori = img_real_ex.copy()
-        img_masked = cv2.rectangle(img_real_ex_ori,(5,5,150,145),(0,0,0),-1)
- 
-        img_masked = img_masked.transpose(2,0,1).astype(np.float32)
-        img_real_ex = img_real_ex.transpose(2,0,1).astype(np.float32)
-
-        img_real_ex_T = torch.from_numpy(img_real_ex / 255.0)
-
-        img_masked_T = torch.from_numpy(img_masked / 255.0)
-        img_concat_T = torch.cat([img_real_ex_T, img_masked_T], axis=0)[None]
-
-        audio_feat = get_audio_features(audio_feats, i)
+    for i in tqdm(range(total_run)):
+        save_path = f"{uid}_{i}.mp4"
         if mode=="hubert":
-            audio_feat = audio_feat.reshape(32,32,32)
+            video_writer = cv2.VideoWriter(save_path, cv2.VideoWriter_fourcc(*'mp4v'), 25, (init_w, init_h))
         if mode=="wenet":
-            audio_feat = audio_feat.reshape(256,16,32)
-        audio_feat = audio_feat[None]
-        audio_feat = audio_feat.to(device)
-        img_concat_T = img_concat_T.to(device)
+            video_writer = cv2.VideoWriter(save_path, cv2.VideoWriter_fourcc(*'mp4v'), 20, (init_w, init_h))
+
+
+        # buffer the images for post-processing
+        batch_img = []
+        batch_crop_img_ori = []
+        batch_xmin = []
+        batch_xmax = []
+        batch_ymin = []
+        batch_ymax = []
+        batch_h = []
+        batch_w = []
+
+        for ii in range(bs):
+            if i*bs + ii >= total_frame_num: # if current batch frame idx exceed audio length, just forward the unpadded batch
+                break
+
+            if img_idx>len_img - 1: # circulate when audio length is longer than video imgs length
+                step_stride = -1
+            if img_idx<1:
+                step_stride = 1
+            img_idx += step_stride
+            img_path = img_dir + str(img_idx)+'.jpg'
+            lms_path = lms_dir + str(img_idx)+'.lms'
+            img = cv2.imread(img_path)
+            batch_img.append(img)
+            # TODO preload in memory
+            lms_list = []
+            with open(lms_path, "r") as f:
+                lines = f.read().splitlines()
+                for line in lines:
+                    arr = line.split(" ")
+                    arr = np.array(arr, dtype=np.float32)
+                    lms_list.append(arr)
+            lms = np.array(lms_list, dtype=np.int32)
+            xmin = lms[1][0]
+            ymin = lms[52][1]
+            xmax = lms[31][0]
+            width = xmax - xmin
+            ymax = ymin + width
+            batch_xmin.append(xmin)
+            batch_ymin.append(ymin)
+            batch_xmax.append(xmax)
+            batch_ymax.append(ymax)
+
+            crop_img = img[ymin:ymax, xmin:xmax]
+            h, w = crop_img.shape[:2]
+            batch_h.append(h)
+            batch_w.append(w)
+            crop_img = cv2.resize(crop_img, (168, 168), cv2.INTER_AREA)
+            crop_img_ori = crop_img.copy()
+
+            batch_crop_img_ori.append(crop_img_ori)
+
+            img_real_ex = crop_img[4:164, 4:164].copy()
+            img_real_ex_ori = img_real_ex.copy()
+            img_masked = cv2.rectangle(img_real_ex_ori,(5,5,150,145),(0,0,0),-1)
+            
+            img_masked = img_masked.transpose(2,0,1).astype(np.float32)
+            img_real_ex = img_real_ex.transpose(2,0,1).astype(np.float32)
+            
+            img_real_ex_T = torch.from_numpy(img_real_ex / 255.0)
+            img_masked_T = torch.from_numpy(img_masked / 255.0)
+            img_concat_T = torch.cat([img_real_ex_T, img_masked_T], axis=0)[None]
+            
+            audio_feat = get_audio_features(audio_feats, i*bs + ii) # index change
+            if mode=="hubert":
+                audio_feat = audio_feat.reshape(32,32,32)
+
+            if mode=="wenet":
+                audio_feat = audio_feat.reshape(256,16,32)
+            audio_feat = audio_feat[None]
+            audio_feat = audio_feat.to(device)
+            img_concat_T = img_concat_T.to(device)
+
+            # batch imgs here! prepare net(img_concat_T, audio_feat)
+            if ii == 0:
+                batch_img_concat_T = img_concat_T
+                batch_audio_feat = audio_feat
+            else:
+                batch_img_concat_T = torch.cat([batch_img_concat_T, img_concat_T])
+                batch_audio_feat = torch.cat([batch_audio_feat, audio_feat])
 
         with torch.no_grad():
-            pred = net(img_concat_T, audio_feat)[0]
+            # Control here to close the mouth?
+            # audio_feat.fill_(0)
+            # feed the batched input
+            # print(batch_audio_feat.size(0))
+            # If not full batch, pad to full batch
+            # This is useful for HPU static shape
+            if device == "hpu" and batch_audio_feat.size(0) < bs:
+                concrete_bs = batch_audio_feat.size(0)
+                batch_img_concat_T = torch.nn.functional.pad(batch_img_concat_T, (0,0,0,0,0,0,0,bs-concrete_bs), value=0)
+                batch_audio_feat = torch.nn.functional.pad(batch_audio_feat, (0,0,0,0,0,0,0,bs-concrete_bs), value=0)
+                
+                batch_pred = net(batch_img_concat_T, batch_audio_feat)[:concrete_bs]
+                # print(batch_img_concat_T.size(0))
+                # print(batch_pred.size(0))
+            else:
+                batch_pred = net(batch_img_concat_T, batch_audio_feat)
 
-        pred = pred.cpu().numpy().transpose(1,2,0)*255
-        pred = np.array(pred, dtype=np.uint8)
-        crop_img_ori[4:164, 4:164] = pred
-        crop_img_ori = cv2.resize(crop_img_ori, (w, h))
-        img[ymin:ymax, xmin:xmax] = crop_img_ori
+        for jj in range(bs):
+            if i*bs + jj >= total_frame_num: # if current batch frame idx exceed audio length, just forward the unpadded batch
+                break
+            pred = batch_pred[jj].cpu().numpy().transpose(1,2,0)*255
+            pred = np.array(pred, dtype=np.uint8)
+            crop_img_ori = batch_crop_img_ori[jj]
+            crop_img_ori[4:164, 4:164] = pred
+            crop_img_ori = cv2.resize(crop_img_ori, (batch_w[jj], batch_h[jj]))
+            img = batch_img[jj]
+            img[batch_ymin[jj]:batch_ymax[jj], batch_xmin[jj]:batch_xmax[jj]] = crop_img_ori
+            video_writer.write(img)
+        video_writer.release()
 
-        _, jpeg_frame = cv2.imencode('.jpg', img)
-        yield jpeg_frame.tobytes()
-        elapsed_time = time.time() - start_time
-        sleep_time = max(0, frame_time - elapsed_time)
-        time.sleep(sleep_time) # keep 25fps yield
+        # TODO bind audio with the save_path video
+        # clip the partial audio
+        result_path = f"result_{save_path}"
+        partial_audio_path = f"result_{save_path.split('.')[0]}.wav"
+        # Duration of each video chunk in seconds
+        chunk_duration = bs / 25 if mode == "hubert" else 20
+        # Convert chunk duration to samples
+        sample_wav_for_each_run = int(chunk_duration * 16000)
+        partial_audio = speech_16k[i*sample_wav_for_each_run: (i+1)*sample_wav_for_each_run]
+        sf.write(partial_audio_path, partial_audio, 16000)
+        os.system(f"ffmpeg -i {save_path} -i {partial_audio_path} -c:v libx264 -c:a aac -ar 16000 -r 25 -shortest {result_path}")
+        os.remove(save_path)
+        os.remove(partial_audio_path)
+        for res_str in generate_video_as_text_stream(result_path):
+            yield res_str
+        if i == 0:
+            print(f"First batch video returned in {time.time()-S} sec")
+
+    print(f"Unet generation and video write takes {time.time()-S} sec")
+    yield "data: [DONE]\n\n"
+
+
 
 def dh_infer(file_name):
     uid = file_name.split(".")[0]
@@ -221,11 +309,7 @@ def dh_infer(file_name):
     if mode=="wenet":
         video_writer = cv2.VideoWriter(save_path, cv2.VideoWriter_fourcc('M','J','P', 'G'), 20, (w, h))
 
-    # generate frames with variable time control
-    frame_time = 1 / 25 if mode=="hubert" else 20
-
     for i in tqdm(range(audio_feats.shape[0])):
-        start_time = time.time()
         if img_idx>len_img - 1:
             step_stride = -1
         if img_idx<1:
@@ -317,9 +401,9 @@ async def digital_human(file: UploadFile = File(...)):
     with open(file_name, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
 
-    res_path = dh_infer(file_name,)
+    res_path_gen = dh_infer(file_name,)
 
-    return StreamingResponse(generate_video(res_path), media_type="video/mp4")
+    return StreamingResponse(generate_video(res_path_gen), media_type="video/mp4")
 
 @app.post("/v1/digital_human_flow")
 async def digital_human(request: Request):
@@ -338,17 +422,33 @@ async def digital_human(request: Request):
     return StreamingResponse(generate_video(res_path), media_type="video/mp4")
 
 @app.post("/v1/digital_human_fast")
-async def digital_human(request: Request):
-    # FIXME fix the multipart error, do not use this!!
-    """Input: path to the audio, Output: Streaming JPEG frames response."""
+async def digital_human_fast(request: Request):
+    """Input: path to the audio, Output: Streaming video response."""
     print("Digital human inference begin.")
 
     request_dict = await request.json()
     file_path = request_dict.pop("audio_path")
 
-    jpeg_gen = dh_infer_gen(file_path,)
+    # FIXME only the first clip is returned!
+    # return StreamingResponse(dh_infer_gen(file_path,), media_type="video/mp4")
+    return StreamingResponse(dh_infer_gen(file_path,), media_type="text/event_stream")
 
-    return StreamingResponse(jpeg_gen, media_type="multipart/x-mixed-replace; boundary=frame")
+    # video_files = [f"result_1f4d2584-e9e6-47a5-8f96-3fca0f510755_{i}.mp4" for i in range(5)]
+    # async def generate_video_stream(file_paths):
+    #     for file_path in file_paths:
+    #         print(f"xxx: {file_path}")
+
+    #         with open(file_path, 'rb') as video_file:
+    #             # yield from video_file  # Stream the file content in chunks FIXME Why only return the first??
+    #             bytes = video_file.read()
+    #         b64_str = base64.b64encode(bytes).decode()
+    #         # breakpoint()
+    #         yield f"data: {b64_str}\n\n"
+    #         time.sleep(5)
+    #     yield "data: [DONE]\n\n"
+
+    # return StreamingResponse(generate_video_stream(video_files), media_type="text/event_stream")
+
 
 if __name__ == "__main__":
 
